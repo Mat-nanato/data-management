@@ -885,7 +885,6 @@ struct DailyReportView: View {
                 }
         }
     }
-
     
     private func currentDaySales() -> Double {
         let key = "\(storeName)_\(formattedDate(date))"
@@ -1035,8 +1034,6 @@ struct DailyReportView: View {
         return base
     }
 
-
-
     // MARK: - 日報保存（画面は閉じない）
     private func saveReport() {
         let key = "\(storeName)_\(formattedDate(date))"
@@ -1104,8 +1101,6 @@ struct DailyReportView: View {
         }
     }
 
-    
-    
     // MARK: - トーク送信用関数
     private func sendToTalk(message: String) {
         // 実際はトーク画面に送信する処理
@@ -1136,8 +1131,7 @@ struct DailyReportView: View {
         
         return filename
     }
-    
-    
+        
     func fetchAllStorePhotosGroupedByDate(storeName: String) -> [String: [URL]] {
         var photosByDate: [String: [URL]] = [:]
         let fileManager = FileManager.default
@@ -1517,9 +1511,6 @@ struct ContentView: View {
                         loadDailyData(for: selectedDate) // 選択日の個別データがあれば上書き
                     }
 
-
-
-
                     // カレンダー直後に追加
                     HStack(spacing: 20) {
                         Text("↑：最高気温")
@@ -1651,7 +1642,6 @@ struct ContentView: View {
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .keyboardType(.numberPad)
                             .onChange(of: monthlySalesTarget) {
-                                // oldValue/newValue は不要
                                 manualMonthlyTarget = true
 
                                 // 数字だけ抽出して3桁区切り
@@ -1661,20 +1651,11 @@ struct ContentView: View {
                                     formatter.numberStyle = .decimal
                                     monthlySalesTarget = formatter.string(from: NSNumber(value: number)) ?? ""
 
-                                    // 最終手入力値として保存
                                     let wasteValue = Int(wasteBudget.replacingOccurrences(of: ",", with: "")) ?? 0
-                                    let data: [String: Any] = [
-                                        "monthlySalesTarget": number,
-                                        "wasteBudget": wasteValue,
-                                        "timestamp": ISO8601DateFormatter().string(from: Date())
-                                    ]
-                                    let key = "\(storeName)_monthlyLatest"
-                                    UserDefaults.standard.set(data, forKey: key)
+                                    saveMonthlyTargetForAllDays(salesValue: number, wasteValue: wasteValue)
                                 } else {
                                     monthlySalesTarget = ""
                                 }
-
-                                saveDailyData(for: selectedDate)
                             }
 
                             .toolbar {
@@ -1872,6 +1853,45 @@ struct ContentView: View {
                 }
         }
     
+    func saveMonthlyTargetForAllDays(salesValue: Int, wasteValue: Int) {
+        let calendar = Calendar.current
+        let comps = calendar.dateComponents([.year, .month], from: Date())
+        guard let firstOfMonth = calendar.date(from: comps),
+              let range = calendar.range(of: .day, in: .month, for: firstOfMonth) else { return }
+
+        for day in range {
+            if let date = calendar.date(bySetting: .day, value: day, of: firstOfMonth) {
+                let docId = formattedDate(date)
+                let data: [String: Any] = [
+                    "monthlySalesTarget": salesValue,
+                    "wasteBudget": wasteValue,
+                    "timestamp": ISO8601DateFormatter().string(from: Date())
+                ]
+
+                // UserDefaults に日ごと保存
+                UserDefaults.standard.set(data, forKey: "\(storeName)_dailyData_\(docId)")
+
+                // Firestore に日ごと保存
+                db.collection("stores")
+                    .document(storeName)
+                    .collection("dailyReports")
+                    .document(docId)
+                    .setData(data) { error in
+                        if let error = error {
+                            print("Firestore 保存エラー:", error)
+                        }
+                    }
+            }
+        }
+
+        // 月単位最新値も更新
+        let monthKey = "\(storeName)_monthlyLatest_\(calendar.component(.month, from: Date()))"
+        UserDefaults.standard.set(
+            ["monthlySalesTarget": salesValue, "wasteBudget": wasteValue, "timestamp": ISO8601DateFormatter().string(from: Date())],
+            forKey: monthKey
+        )
+    }
+
     func saveMonthlyLatestValues() {
         let salesValue = Int(monthlySalesTarget.replacingOccurrences(of: ",", with: "")) ?? 0
         let wasteValue = Int(wasteBudget.replacingOccurrences(of: ",", with: "")) ?? 0
