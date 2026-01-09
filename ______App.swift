@@ -6,10 +6,17 @@ import FirebaseFirestore
 import Combine
 import BackgroundTasks
 
-
 enum AppOrientation {
     static var lock: UIInterfaceOrientationMask = .portrait
 }
+
+// 他のコードの下に移動
+enum MainRoute: Hashable {
+    case storeSelect
+    case calendar(store: Store)
+    case shift(store: Store, date: Date)
+}
+
 
 // AppDelegate（必要なら残す）
 class AppDelegate: NSObject, UIApplicationDelegate {
@@ -21,9 +28,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
 @main
 struct MyApp: App {
-    // 🔥 全アプリで共有する Firestore VM
-    @StateObject var appVM = AppFirestoreVM()
-    @StateObject var photoVM = PhotoVM()   // ← 追加
+    @StateObject var appVM = AppFirestoreVM()      // Firestore VM
+    @StateObject var photoVM = PhotoVM()           // ← ここで PhotoVM を生成
 
     init() {
         FirebaseApp.configure()
@@ -33,8 +39,8 @@ struct MyApp: App {
     var body: some Scene {
         WindowGroup {
             DoorView()
-                .environmentObject(appVM)
-                .environmentObject(photoVM)   // ← 追加
+                .environmentObject(appVM)           // Firestore VM を渡す
+                .environmentObject(photoVM)         // PhotoVM を渡す（全子ビューで利用可能に）
         }
     }
 }
@@ -60,6 +66,7 @@ struct MyApp: App {
         task.setTaskCompleted(success: true)
     }
 
+
     // MARK: - 次回タスクのスケジュール
     func scheduleNextWeatherRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: "com.yourapp.weatherRefresh")
@@ -74,6 +81,9 @@ struct MyApp: App {
 
 // MARK: - メイン画面
 struct DoorView: View {
+    @State private var temperatureMessage: String = ""
+    @State private var fetchTemperatureOnSelect: Bool = false
+    @State private var navigateToTemperatureSelect = false
     @State private var navigateToStoreSelect = false
     @State private var navigateToShiftEditor = false
     @State private var selectedStoreForShift: Store? = nil
@@ -82,16 +92,20 @@ struct DoorView: View {
     @State private var navigateToHistory = false
     @State private var navigateToPhotoFolder = false
     @State private var navigateToChat = false
-    @State private var pastMessages: [PastChatMsg] = []  // 型を PastChatMsg に変更
-    @StateObject private var fm = FamilyMartInfoViewModel()
+    @State private var pastMessages: [PastChatMsg] = []
+
+    // -----------------------------
+    // FamilyMart 統合 ViewModel に変更
+    // -----------------------------
+    @StateObject private var fmVM = FamilyMartViewModel()
+
     @State private var bottomCards = ["東勝山", "上杉", "木町", "安養寺", "利府", "電力", "中山"]
-    @State private var productTexts: [String] = [] // UI に反映される
+    @State private var productTexts: [String] = []
     @State private var sharedMessages: [Message] = [
         Message(text: "お疲れ様です！", isMyMessage: false),
         Message(text: "最後、名前を入れてください", isMyMessage: true),
         Message(text: "日報数値は自動反映されます", isMyMessage: false)
     ]
-    
     // MARK: - POPフォーム関連
     @State private var showPOPForm = false
     @State private var popProductName = ""
@@ -110,7 +124,20 @@ struct DoorView: View {
     @State private var megaphonePrice = ""
     
     @EnvironmentObject var appVM: AppFirestoreVM
+    
+    
+    @State private var stores: [Store] = [
+        Store(name: "東勝山", baseShifts: [ShiftRange(start: 9, end: 18)], location: .higashikatsuyama),
+        Store(name: "上杉",   baseShifts: [ShiftRange(start: 8, end: 17)], location: .uesugi),
+        Store(name: "木町",   baseShifts: [ShiftRange(start: 10, end: 19)], location: .kimachi),
+        Store(name: "安養寺", baseShifts: [ShiftRange(start: 9, end: 18)], location: .anyoji),
+        Store(name: "利府",   baseShifts: [ShiftRange(start: 7, end: 16)], location: .rifu),
+        Store(name: "電力",   baseShifts: [ShiftRange(start: 12, end: 21)], location: .denryoku),
+        Store(name: "中山",   baseShifts: [ShiftRange(start: 9, end: 18)], location: .nakayama)
+    ]
 
+    @EnvironmentObject var photoVM: PhotoVM
+    
     @MainActor
     func generatePOPButtonTapped() async {
         isGeneratingPOP = true
@@ -198,38 +225,60 @@ struct DoorView: View {
                     .allowsHitTesting(false)
                 
                 VStack {
-                    // 🔥 上部カード
+                    // 🔥 上部カード200
                     VStack(alignment: .leading, spacing: 10) {
                         Text("ファミマ最新情報")
                             .font(.headline)
                             .padding(.top, 10)
+                            .padding(.leading, 100)
                         
                         ScrollView(.vertical, showsIndicators: true) {
-                            HStack {
-                                Spacer().frame(width: 28)   // ✅ 物理的に左に空白を作る（絶対ズレる）
+                            
+                            VStack(alignment: .leading, spacing: 16) {
                                 
-                                VStack(alignment: .leading, spacing: 5) {
-                                    if fm.isLoading {
+                                // 🆕 新商品
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("🆕 表示は一例です")
+                                        .font(.subheadline)
+                                        .bold()
+                                    
+                                    if fmVM.isLoading {
                                         ProgressView()
                                     } else {
-                                        Text(fm.latestInfo)
+                                        ForEach(fmVM.latestItems) { item in
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(item.title)
+                                                    .font(.footnote)
+
+                                                if let subtitle = item.subtitle {
+                                                    Text(subtitle)
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+
+                                                if let urlStr = item.url, let url = URL(string: urlStr) {
+                                                    Link("詳細", destination: url)
+                                                        .font(.caption2)
+                                                }
+                                            }
+                                        }
+
                                     }
                                 }
-                                
-                                Spacer()
+
                             }
+                            .padding()
                         }
-                        .frame(height: 170)
-                        
+                        .frame(width: UIScreen.main.bounds.width / 1.5)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                        .shadow(radius: 2)
+                        .padding(.top, 0)
+                        .offset(x: 45)
+                        .task {
+                            await fmVM.loadAllData()
+                        }
                     }
-                    
-                    .frame(width: UIScreen.main.bounds.width / 1.5)
-                    .background(Color.white)
-                    .cornerRadius(10)
-                    .shadow(radius: 2)
-                    .padding(.top, 50)
-                    .offset(x: 45)
-                    
                     // 右側店舗カード
                     HStack {
                         Spacer()
@@ -246,7 +295,6 @@ struct DoorView: View {
                                         .shadow(radius: 2)
                                 }
                             }
-
                         }
                         .padding(.trailing, 20)
                     }
@@ -264,29 +312,52 @@ struct DoorView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.leading,28) // ← 左に寄せる量
-                .padding(.top, 20)     // ← 縦位置調整
-
-               
+                .ignoresSafeArea(edges: .top)      // ← 縦位置調整
+                .offset(y: 1)
+                
+                // ★ メイン中央ボタン「どこのお店？」（少し小さく）
+                Button {
+                    navigateToTemperatureSelect = true
+                } label: {
+                    Text("どこのお店？")
+                        .font(.headline)
+                        .bold()
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.orange)
+                                .shadow(radius: 4)
+                        )
+                }
+                .navigationDestination(isPresented: $navigateToTemperatureSelect) {
+                    TemperatureStoreSelectView(stores: stores)
+                        .environmentObject(appVM)
+                        .environmentObject(photoVM)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .offset(x: -22, y: 28)
+                
                 // 左側ボタン群（POP以外）
                 VStack(spacing: 20) {
                     SideButton(icon: "calendar", title: nil, backgroundColor: .orange) {
                         navigateToStoreSelect = true
                     }
-
+                    
                     SideButton(icon: "message.fill", title: nil, backgroundColor: .blue) {
                         navigateToChat = true
                     }
-
+                    
                     SideButton(icon: "megaphone.fill", title: nil, backgroundColor: .green) {
                         showMegaphoneForm = true
                     }
                     .padding(.leading, -1) // ← 小さくマイナスにして少し左に
-
-
+                    
                     SideButton(icon: "photo.fill", title: nil, backgroundColor: .purple) {
                         navigateToPhotoFolder = true
                     }
-
+                    
                     CoinButton(icon: "bitcoinsign.circle.fill", title: nil) {
                         let manager = CLLocationManager()
                         manager.requestWhenInUseAuthorization()
@@ -296,11 +367,10 @@ struct DoorView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading) // ← 左寄せ
                     .offset(x: 4) // ← さらに左に微調整
-
-
+                    
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 130)
+                .padding(.top, 100)
                 .padding(.leading, 5)
                 
                 // ★ 最新写真（正しい場所：ZStack の最上層）
@@ -339,18 +409,42 @@ struct DoorView: View {
                 PhotoFolderView(sharedMessages: $sharedMessages)
             }
             .navigationDestination(isPresented: $navigateToStoreSelect) {
-                StoreSelectView(stores: bottomCards.map { Store(name: $0, baseShifts: [ShiftRange(start: 9, end: 18)]) })
+                
+                StoreSelectView(
+                    stores: Array(zip(bottomCards, [
+                        StoreLocation.higashikatsuyama,
+                        .uesugi,
+                        .kimachi,
+                        .anyoji,
+                        .rifu,
+                        .denryoku,
+                        .nakayama
+                    ])).map { name, loc in
+                        Store(
+                            name: name,
+                            baseShifts: [ShiftRange(start: 9, end: 18)],
+                            location: loc
+                        )
+                    },
+                    fetchTemperatureOnSelect: false,   // ← 🔥 絶対 false
+                    purpose: .shift                    // ← 🔥 参考情報ルート完全遮断
+                )
+                .environmentObject(appVM)
+                .environmentObject(photoVM)
             }
+            
             .navigationDestination(isPresented: $navigateToShiftEditor) {
                 if let store = selectedStoreForShift {
                     LandscapeView {
-                        ShiftEditorView(store: store)
+                        ShiftEditorView(store: store, selectedDate: Date())
                     }
                 }
             }
-
+            
             .onAppear {
-                fm.loadLatestInfo()
+                Task {
+                    await fmVM.loadAllData()  // ← 最新商品＋キャンペーンを一括取得
+                }
                 
                 let storesList = bottomCards
                 if let info = loadLatestPhotoInfo(stores: storesList) {
@@ -361,9 +455,7 @@ struct DoorView: View {
                     latestPhotoStore = nil
                 }
             }
-            
-        } // NavigationStack
-
+        }
         // POPフォーム用シート
         .sheet(isPresented: $showPOPForm) {
             VStack(spacing: 20) {
@@ -378,7 +470,6 @@ struct DoorView: View {
                                 .scaledToFit()
                                 .frame(width: 600)
                         }
-
                         Button(action: {
                             showPOPForm = false
                             showPOPImage = false
@@ -591,26 +682,130 @@ struct DoorView: View {
     }
 }
 
+enum StoreSelectPurpose {
+    case temperature   // 参考情報取得用
+    case shift         // シフト用
+}
+
 struct StoreSelectView: View {
     let stores: [Store]
-    @State private var navigateToShiftEditor = false
-    @State private var selectedStore: Store? = nil
+    let fetchTemperatureOnSelect: Bool
+    let purpose: StoreSelectPurpose   // .temperature / .shift
+
+    // ===== temperature 用 =====
+    @State private var path = NavigationPath()
+    @State private var temperatureMessage: String = ""
+    @State private var isAIReply: Bool = false
+
+    // ===== shift 用 =====
+    @State private var selectedStoreForShift: Store? = nil
+
+    private let aiUseCase = AIRecommendationUseCase()
+
+    @EnvironmentObject var appVM: AppFirestoreVM
+    @EnvironmentObject var photoVM: PhotoVM
 
     var body: some View {
         List(stores) { store in
-            Button(store.name) {
-                selectedStore = store
-                navigateToShiftEditor = true
+            Button {
+                handleStoreTap(store)
+            } label: {
+                Text(store.name)
             }
         }
         .navigationTitle("店舗を選択")
-        .navigationDestination(isPresented: $navigateToShiftEditor) {
-            if let store = selectedStore {
-                ShiftEditorView(store: store)
+
+        // シフト用のみ sheet
+        .sheet(item: $selectedStoreForShift) { store in
+            ShiftEditorView(
+                store: store,
+                selectedDate: Date()
+            )
+            .environmentObject(photoVM)
+            .environmentObject(appVM)
+        }
+    }
+
+    // 店舗リスト
+    private var storeList: some View {
+        List(stores) { store in
+            Button {
+                handleStoreTap(store)
+            } label: {
+                Text(store.name)
+            }
+        }
+    }
+
+    // タップ処理
+    private func handleStoreTap(_ store: Store) {
+        switch purpose {
+
+        case .temperature:
+            // ❌ 何もしない
+            // 参考情報への遷移は「このViewの責任ではない」
+            break
+
+        case .shift:
+            selectedStoreForShift = store
+        }
+    }
+
+    // 温度取得
+    private func fetchAndPrepareTemperature(store: Store) async {
+        let location = store.location
+        await AppWeatherVM.shared.downloadWeatherFromOpenMeteo(for: location)
+
+        let today = Date()
+        guard let tempToday = AppWeatherVM.shared.dailyTemperatures
+            .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })?.max
+        else {
+            await MainActor.run {
+                temperatureMessage = "今日の気温が取得できません"
+                isAIReply = false
+            }
+            return
+        }
+
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today)!
+        let lastWeek = Calendar.current.date(byAdding: .day, value: -7, to: today)!
+        let lastYear = Calendar.current.date(byAdding: .year, value: -1, to: today)!
+
+        async let y = fetchReport(storeName: store.name, date: yesterday)
+        async let w = fetchReport(storeName: store.name, date: lastWeek)
+        async let l = fetchReport(storeName: store.name, date: lastYear)
+
+        let (yr, wr, lr) = await (y, w, l)
+
+        guard let yr, let wr, let lr else {
+            await MainActor.run {
+                temperatureMessage = "過去データがありません"
+                isAIReply = false
+            }
+            return
+        }
+
+        let summary = aiUseCase.buildSalesSummary(
+            yesterday: yr,
+            lastWeek: wr,
+            lastYear: lr,
+            temperatureYesterday: yr.temperature,
+            temperatureDayBefore: wr.temperature,
+            temperatureToday: tempToday
+        )
+
+        await MainActor.run {
+            if summary.hasPrefix("[AI]") {
+                isAIReply = true
+                temperatureMessage = String(summary.dropFirst(4))
+            } else {
+                isAIReply = false
+                temperatureMessage = summary
             }
         }
     }
 }
+
 
 struct SideButton: View {
     let icon: String?
@@ -1399,4 +1594,320 @@ struct MegaphoneFormView: View {
     }
 }
 
+struct TemperatureView: View {
+    let store: Store
+    @Binding var temperatureMessage: String
+    @Binding var aiMessage: String
+    @Binding var isAIReply: Bool
 
+    @Binding var yesterdaySales: String        // 日報で入力した売上
+    @Binding var yesterdayCustomerCount: String // 日報で入力した客数
+    @Binding var yesterdayWaste: String
+    
+    var body: some View {
+        ZStack {
+            // 背景画像（下半分見切らせる）
+            Image("Image")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 200)
+                .opacity(0.5)
+                .offset(y: 410)
+                .ignoresSafeArea(edges: .bottom)
+
+            VStack(spacing: 16) {
+                // 店舗名
+                Text("\(store.name)店")
+                    .font(.title)
+                    .bold()
+                    .padding(.top)
+                
+                // 気温情報と昨日の実績を横並び
+                HStack(alignment: .top, spacing: 12) {
+                    // 今日の最高・最低気温
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("気温情報")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(temperatureMessage.isEmpty ? "–" : temperatureMessage)
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .foregroundColor(.white)
+                    }
+                    .padding(12)
+                    .background(Color.black.opacity(0.35))
+                    .cornerRadius(10)
+                    .frame(minHeight: 100) // 高さ固定
+
+                    // 売上・客数・廃棄（昨日の数字）
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("売上")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text(yesterdaySales.isEmpty ? "–" : yesterdaySales)
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        HStack {
+                            Text("客数")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text(yesterdayCustomerCount.isEmpty ? "–" : yesterdayCustomerCount)
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        HStack {
+                            Text("廃棄")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text(yesterdayWaste.isEmpty ? "–" : yesterdayWaste)
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.black.opacity(0.35))
+                    .cornerRadius(10)
+
+                }
+                .padding(.horizontal)
+
+                // AI総括枠（スクロール対応）
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("🤖 ファ○っぺからのアドバイス")
+                        .font(.title2)
+                        .bold()
+                        .foregroundColor(.white)
+
+                    ScrollView {
+                        Text(aiMessage.isEmpty ? "–" : aiMessage)
+                            .foregroundColor(.white)
+                            .font(.body)
+                            .padding(.top, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(20)
+                .frame(height: 320) // ← 枠の高さは固定、本文はスクロール
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color.blue.opacity(0.8),
+                            Color.purple.opacity(0.8)
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .cornerRadius(20)
+                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 5)
+                .padding(.horizontal)
+
+
+                Spacer()
+            }
+        }
+        .navigationTitle("参考情報")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            callAI()
+        }
+    }
+    // 🔹 AIに総括を依頼
+    func callAI() {
+        print("callAI isAIReply =", isAIReply)        // すでにAI応答済みなら再呼び出ししない
+        guard !isAIReply else { return }
+
+        isAIReply = true
+        aiMessage = "分析中…"
+
+        Task {
+            do {
+                let summary = """
+                昨日の実績:
+                売上: \(yesterdaySales)
+                客数: \(yesterdayCustomerCount)
+                廃棄: \(yesterdayWaste)
+
+                気温情報:
+                \(temperatureMessage)
+                """
+
+                let reply = try await AIRecommendationUseCase().generateRecommendation(
+                    salesSummary: summary,
+                    newProducts: WeeklyInfoStore.shared.newProducts,
+                    campaigns: WeeklyInfoStore.shared.campaigns
+                )
+                if isAIReply {
+                    print("callAI: already replied, return")
+                    return
+                }
+                print("AI reply (raw):", reply)
+                
+                await MainActor.run {
+                    aiMessage = reply
+                }
+            } catch {
+                await MainActor.run {
+                    aiMessage = "AI取得失敗"
+                }
+            }
+        }
+    }
+}
+@MainActor
+final class WeeklyInfoStore: ObservableObject {
+    static let shared = WeeklyInfoStore()
+
+    @Published var newProducts: [String] = []
+    @Published var campaigns: [String] = []
+
+    private init() {}
+}
+
+struct TemperatureStoreSelectView: View {
+    let stores: [Store]
+    @State private var aiMessage: String = ""
+    @State private var isAIReply = false
+    @State private var selectedStore: Store? = nil
+    @State private var temperatureMessage = ""
+    @State private var sales: String = ""
+    @State private var customerCount: String = ""
+    @State private var wasteAmount: String = ""
+
+
+    @EnvironmentObject var appVM: AppFirestoreVM
+    @EnvironmentObject var photoVM: PhotoVM
+
+    var body: some View {
+        NavigationStack {
+            List(stores) { store in
+                Button {
+                    Task {
+                        await showTemperature(for: store)
+                        selectedStore = store
+                    }
+                } label: {
+                    Text("\(store.name)店")
+                }
+            }
+            .navigationTitle("店舗を選択")
+            .navigationDestination(item: $selectedStore) { store in
+                TemperatureView(
+                    store: store,
+                    temperatureMessage: $temperatureMessage,
+                    aiMessage: $aiMessage,
+                    isAIReply: $isAIReply,
+                    yesterdaySales: $sales,                // 日報画面で入力している Binding
+                    yesterdayCustomerCount: $customerCount,
+                    yesterdayWaste: $wasteAmount
+                )
+                .environmentObject(appVM)
+                .environmentObject(photoVM)
+            }
+
+        }
+    }
+
+    // MARK: - 今日の気温を表示
+    private func showTemperature(for store: Store) async {
+        let today = Date()
+
+        await MainActor.run {
+            temperatureMessage = "気温を取得中です"
+            isAIReply = false
+        }
+
+        // まず既存カレンダーデータを確認
+        if let todayTemp = AppWeatherVM.shared.dailyTemperatures
+            .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) }) {
+
+            await MainActor.run {
+                temperatureMessage = "最高気温: \(todayTemp.max)℃\n最低気温: \(todayTemp.min)℃"
+            }
+
+        } else {
+            // データがなければ OpenMeteo を叩く
+            await AppWeatherVM.shared.downloadWeatherFromOpenMeteo(for: store.location)
+
+            if let newTemp = AppWeatherVM.shared.dailyTemperatures
+                .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) }) {
+
+                await MainActor.run {
+                    temperatureMessage = "最高気温: \(newTemp.max)℃\n最低気温: \(newTemp.min)℃"
+                }
+
+            } else {
+                await MainActor.run {
+                    temperatureMessage = "今日の気温が取得できません"
+                }
+            }
+        }
+    }
+
+    // MARK: - 今日の最高・最低気温をカレンダーから取得
+    private func setTodayTemperature(store: Store) async {
+        let today = Date()
+
+        // MainActor上で安全にアクセス
+        await MainActor.run {
+            if let todayTemp = AppWeatherVM.shared.dailyTemperatures
+                .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) }) {
+
+                temperatureMessage = "最高気温: \(todayTemp.max)℃\n最低気温: \(todayTemp.min)℃"
+
+            } else {
+                temperatureMessage = "今日の気温が取得できません"
+            }
+        }
+    }
+
+    // MARK: - AI総括取得（必要に応じて呼び出す）
+    private func fetchAISummary(store: Store) async {
+        let today = Date()
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today)!
+        let lastWeek = Calendar.current.date(byAdding: .day, value: -7, to: today)!
+        let lastYear = Calendar.current.date(byAdding: .year, value: -1, to: today)!
+
+        async let y = fetchReport(storeName: store.name, date: yesterday)
+        async let w = fetchReport(storeName: store.name, date: lastWeek)
+        async let l = fetchReport(storeName: store.name, date: lastYear)
+
+        let (yr, wr, lr) = await (y, w, l)
+
+        guard let yr, let wr, let lr else {
+            await MainActor.run {
+                aiMessage = "過去データがありません"
+                isAIReply = false
+            }
+            return
+        }
+
+        // 🔹 修正: 関数内でインスタンス化
+        let aiUseCase = AIRecommendationUseCase()
+
+        let summary = aiUseCase.buildSalesSummary(
+            yesterday: yr,
+            lastWeek: wr,
+            lastYear: lr,
+            temperatureYesterday: yr.temperature,
+            temperatureDayBefore: wr.temperature,
+            temperatureToday: AppWeatherVM.shared.dailyTemperatures
+                .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })?.max ?? 0
+        )
+
+        await MainActor.run {
+            if summary.hasPrefix("[AI]") {
+                aiMessage = String(summary.dropFirst(4))
+                isAIReply = true
+            } else {
+                aiMessage = summary
+                isAIReply = false
+            }
+        }
+    }
+}

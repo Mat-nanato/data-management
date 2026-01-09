@@ -4,6 +4,12 @@ import Firebase
 import FirebaseFirestore
 import FirebaseStorage
 
+extension UIApplication {
+    func dismissKeyboard() {
+        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
 let db = Firestore.firestore()
 
 struct CategoryAmount {
@@ -704,12 +710,9 @@ struct DailyReportView: View {
                     .background(Color.orange.opacity(0.85))
                     .cornerRadius(10)
 
-
-
                 }
 
                 .padding(.horizontal, 2)
-
 
                 HStack {
                     Button(action: {
@@ -1505,6 +1508,7 @@ struct ContentView: View {
                     .cornerRadius(10)
                     .shadow(radius: 2)
                     .padding(.horizontal)
+                    .padding(.top, 10)
                     .onChange(of: selectedDate) {
                         // 選択日が変わったら
                         loadMonthlyLatestValues()    // 全日共通の最後の手入力値を反映
@@ -2049,5 +2053,37 @@ struct ContentView: View {
                 }
         }
     }
-    
+struct ProductListView: View {
+    @StateObject private var fm = FamilyMartViewModel()
 
+    var body: some View {
+        VStack {
+            // 🔴 デバッグ表示
+            Text("アイテム数: \(fm.latestItems.count)")
+                .foregroundColor(.red)
+
+            if fm.isLoading {
+                ProgressView()
+            }
+
+            List(fm.latestItems) { item in
+                VStack(alignment: .leading) {
+                    Text(item.title)
+                        .font(.body)
+                    if let subtitle = item.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+        }
+        .onAppear {
+            print("🔥 ProductListView onAppear")
+            Task {
+                await fm.loadAllData()  // ← ここを変更
+            }
+        }
+    }
+}
