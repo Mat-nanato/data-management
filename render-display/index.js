@@ -3,24 +3,29 @@ import express from "express";
 const app = express();
 app.use(express.json());
 
-let latestCache = null;
+let cachedLatestInfo = null;
 
-// Mac側から結果を送る用
-app.post("/push", (req, res) => {
-  latestCache = req.body;
-  res.json({ ok: true });
+// 動作確認用
+app.get("/", (req, res) => {
+  res.send("Render display server running");
 });
 
-// 不特定多数が見る用
+// Mac から受け取る
+app.post("/update-latest-info", (req, res) => {
+  cachedLatestInfo = req.body;
+  console.log("✅ data updated");
+  res.json({ status: "ok" });
+});
+
+// アプリ・外部公開用
 app.get("/latest-info", (req, res) => {
-  if (!latestCache) {
+  if (!cachedLatestInfo) {
     return res.status(503).json({ error: "no data yet" });
   }
-  res.json(latestCache);
+  res.json(cachedLatestInfo);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(process.env.PORT || 3000, () => {
   console.log("Render display server running");
 });
 
