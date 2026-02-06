@@ -1,9 +1,9 @@
-// index.js（Render 側）
+// server.js（Render 側）
 import express from "express";
 import fs from "fs";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
@@ -11,6 +11,7 @@ app.use(express.json());
 // ブラウザ用トップページ
 // ==============================
 app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.send("Render server is running ✅");
 });
 
@@ -27,6 +28,7 @@ app.post("/save-text", (req, res) => {
   try {
     fs.writeFileSync("latest-info.txt", text, "utf8");
     console.log("✅ Swift からテキスト保存完了");
+    res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   } catch (err) {
     console.error("❌ 保存失敗:", err);
@@ -39,12 +41,16 @@ app.post("/save-text", (req, res) => {
 // ==============================
 app.get("/latest-text", (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
+
     if (!fs.existsSync("latest-info.txt")) {
       return res.json({ text: "" });
     }
 
     const text = fs.readFileSync("latest-info.txt", "utf8");
+    console.log("📤 latest-text sent:", text.length);
     res.json({ text });
+
   } catch (err) {
     console.error("❌ 読み込み失敗:", err);
     res.status(500).json({ error: "failed to read" });
