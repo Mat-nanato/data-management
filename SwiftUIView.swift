@@ -1,3 +1,4 @@
+// AAA確認
 import SwiftUI
 import Firebase
 import FirebaseFirestore
